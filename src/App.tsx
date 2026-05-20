@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
@@ -750,6 +749,33 @@ function StatCard({ label, value, icon, color }: any) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ROUTE COLORS — shared between map polylines and stop list badges
+// ─────────────────────────────────────────────────────────────────────────────
+const ROUTE_COLORS = ['#4f46e5', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HYBRID TRANSPORT POLYLINE STYLES
+// 'pie'  → green (#10b981), dashed dashArray '8, 12', weight 4
+// 'bus'  → route color, solid (no dashArray), weight 5
+// ─────────────────────────────────────────────────────────────────────────────
+function getPolylineOptions(tipoTransporte: string, routeColor: string) {
+  if (tipoTransporte === 'pie') {
+    return {
+      color: '#10b981',
+      weight: 4,
+      opacity: 0.85,
+      dashArray: '8, 12',
+    };
+  }
+  return {
+    color: routeColor,
+    weight: 5,
+    opacity: 0.75,
+    dashArray: undefined,
+  };
+}
+
 function MapsView({ result, rules, selectedRoute, setSelectedRoute, selectedDay, setSelectedDay, showToast }: any) {
   const filteredRoutes = result.rutas.filter((r: any) => 
     (!selectedRoute || r.rutaNombre === selectedRoute) && (selectedDay === null || r.dia === selectedDay)
@@ -915,7 +941,6 @@ function MapsView({ result, rules, selectedRoute, setSelectedRoute, selectedDay,
       ? rules.centroPunto 
       : null;
     
-    // In the HTML JS part, we'll calculate centroid if startPoint is null
     const htmlContent = `
 <!DOCTYPE html>
 <html>
@@ -928,10 +953,13 @@ function MapsView({ result, rules, selectedRoute, setSelectedRoute, selectedDay,
     <style>
         body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; height: 100vh; display: flex; flex-direction: column; }
         header { background: #1e293b; color: white; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }
-        .controls { background: #f8fafc; padding: 1rem 2rem; display: flex; gap: 1rem; border-bottom: 1px solid #e2e8f0; }
+        .controls { background: #f8fafc; padding: 1rem 2rem; display: flex; gap: 1rem; border-bottom: 1px solid #e2e8f0; flex-wrap: wrap; align-items: center; }
         select { padding: 0.5rem; border-radius: 0.5rem; border: 1px solid #cbd5e1; font-size: 0.875rem; min-width: 200px; }
+        .legend { background: white; padding: 10px 14px; border-radius: 8px; box-shadow: 0 0 15px rgba(0,0,0,0.2); line-height: 1.8; font-size: 12px; }
+        .legend-item { display: flex; align-items: center; gap: 8px; }
+        .legend-line { width: 32px; height: 3px; display: inline-block; border-radius: 2px; }
+        .legend-dashed { border-top: 3px dashed #10b981; width: 32px; display: inline-block; }
         #map { flex: 1; width: 100%; }
-        .legend { background: white; padding: 10px; border-radius: 5px; box-shadow: 0 0 15px rgba(0,0,0,0.2); line-height: 1.5; font-size: 12px; }
     </style>
 </head>
 <body>
@@ -952,6 +980,10 @@ function MapsView({ result, rules, selectedRoute, setSelectedRoute, selectedDay,
             <option value="5">Viernes</option>
             <option value="6">Sábado</option>
         </select>
+        <div class="legend">
+          <div class="legend-item"><span class="legend-dashed"></span> A pie (&le;800m)</div>
+          <div class="legend-item"><span class="legend-line" style="background:#4f46e5"></span> En carro/bus (&gt;800m)</div>
+        </div>
     </div>
     <div id="map"></div>
 
@@ -959,122 +991,77 @@ function MapsView({ result, rules, selectedRoute, setSelectedRoute, selectedDay,
         const routes = ${routesJson};
         const manualStartPoint = ${JSON.stringify(startPoint)};
         
-        // Calculate dynamic center if no manual point is provided
         let calcCenter = [4.6097, -74.0817];
         if (!manualStartPoint) {
             let sumLat = 0, sumLng = 0, count = 0;
-            routes.forEach(r => {
-                r.paradas.forEach(s => {
-                    sumLat += s.pdv.latitud;
-                    sumLng += s.pdv.longitud;
-                    count++;
-                });
-            });
+            routes.forEach(r => { r.paradas.forEach(s => { sumLat += s.pdv.latitud; sumLng += s.pdv.longitud; count++; }); });
             if (count > 0) calcCenter = [sumLat/count, sumLng/count];
-        } else {
-            calcCenter = manualStartPoint;
-        }
+        } else { calcCenter = manualStartPoint; }
 
         const map = L.map('map').setView(calcCenter, 12);
-        
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '&copy; OpenStreetMap contributors'
-        }).addTo(map);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
 
-        const routeColors = ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
+        const routeColors = ['#4f46e5', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
         let activeLayers = L.featureGroup().addTo(map);
 
-        // Populate route select
         const routeNames = [...new Set(routes.map(r => r.rutaNombre))];
         const routeSelect = document.getElementById('routeSelect');
         routeNames.forEach(name => {
             const opt = document.createElement('option');
-            opt.value = name;
-            opt.textContent = name;
+            opt.value = name; opt.textContent = name;
             routeSelect.appendChild(opt);
         });
 
         function render() {
             activeLayers.clearLayers();
-            
             if (manualStartPoint) {
-                L.marker(manualStartPoint, {
-                    icon: L.divIcon({
-                        html: '<div style="background:#1e293b; width:12px; height:12px; border-radius:50%; border:2px solid white;"></div>',
-                        className: '',
-                        iconSize: [12, 12]
-                    })
-                }).addTo(activeLayers).bindPopup('Punto de Inicio / Centro de Operaciones');
+                L.marker(manualStartPoint, { icon: L.divIcon({ html: '<div style="background:#1e293b;width:12px;height:12px;border-radius:50%;border:2px solid white;"></div>', className: '', iconSize: [12,12] }) }).addTo(activeLayers).bindPopup('Punto de Inicio / Centro de Operaciones');
             }
 
             const selectedRoute = routeSelect.value;
             const selectedDay = daySelect.value;
-
-            const filtered = routes.filter(r => {
-                const routeMatch = !selectedRoute || r.rutaNombre === selectedRoute;
-                const dayMatch = !selectedDay || r.dia == selectedDay;
-                return routeMatch && dayMatch;
-            });
+            const filtered = routes.filter(r => (!selectedRoute || r.rutaNombre === selectedRoute) && (!selectedDay || r.dia == selectedDay));
 
             filtered.forEach((r, idx) => {
                 const color = routeColors[idx % routeColors.length];
-                
                 r.paradas.forEach((stop, sIdx) => {
                     const pos = [stop.pdv.latitud, stop.pdv.longitud];
-                    
-                    const marker = L.circleMarker(pos, {
-                        radius: 6,
-                        fillColor: color,
-                        color: "#fff",
-                        weight: 2,
-                        opacity: 1,
-                        fillOpacity: 0.8
-                    }).addTo(activeLayers);
+                    const marker = L.circleMarker(pos, { radius: 6, fillColor: color, color: "#fff", weight: 2, opacity: 1, fillOpacity: 0.8 }).addTo(activeLayers);
+                    marker.bindPopup(\`<div style="font-family:sans-serif;"><strong style="color:\${color};">\${stop.pdv.pdv}</strong><br/><div style="font-size:11px;margin-top:4px;"><b>Orden:</b> \${sIdx+1}<br/><b>Llegada:</b> \${stop.horaLlegada}<br/><b>Salida:</b> \${stop.horaSalida}<br/><b>Transporte:</b> \${stop.tipoTransporte === 'pie' ? '🚶 A pie' : '🚌 Bus/Carro'}<br/><b>Viaje:</b> \${stop.distanciaPreviaKm.toFixed(2)} km (\${stop.tiempoTrasladoMin.toFixed(0)} min)<br/><b>Dirección:</b> \${stop.pdv.direccion}</div></div>\`);
 
-                    marker.bindPopup(\`
-                        <div style="font-family: sans-serif;">
-                            <strong style="color: \${color};">\${stop.pdv.pdv}</strong><br/>
-                            <div style="font-size: 11px; margin-top: 4px;">
-                                <b>Orden:</b> \${sIdx + 1}<br/>
-                                <b>Llegada:</b> \${stop.horaLlegada}<br/>
-                                <b>Salida:</b> \${stop.horaSalida}<br/>
-                                <b>Viaje:</b> \${stop.distanciaPreviaKm.toFixed(2)} km (\${stop.tiempoTrasladoMin.toFixed(0)} min)<br/>
-                                <b>Dirección:</b> \${stop.pdv.direccion}
-                            </div>
-                        </div>
-                    \`);
-
-                    // Paint real road routes using polyline for better compatibility
                     if (stop.geometry && stop.geometry.coordinates) {
                         const latLngs = stop.geometry.coordinates.map(c => [c[1], c[0]]);
+                        // V6.7: 'pie' → green dashed, 'bus' → route color solid
+                        const isPie = stop.tipoTransporte === 'pie';
                         L.polyline(latLngs, {
-                            color: color,
-                            weight: 5,
-                            opacity: 0.7,
-                            dashArray: stop.tipoTransporte === 'pie' ? '5, 10' : null
+                            color: isPie ? '#10b981' : color,
+                            weight: isPie ? 4 : 5,
+                            opacity: 0.85,
+                            dashArray: isPie ? '8, 12' : null
                         }).addTo(activeLayers);
                     } else if (sIdx === 0 && manualStartPoint) {
-                        // First stop to Depot
                         L.polyline([manualStartPoint, pos], { color: color, weight: 3, opacity: 0.4, dashArray: '5, 10' }).addTo(activeLayers);
                     } else if (sIdx > 0) {
-                        // Fallback straight line between stops
                         const prevPos = [r.paradas[sIdx-1].pdv.latitud, r.paradas[sIdx-1].pdv.longitud];
-                        L.polyline([prevPos, pos], { color: color, weight: 3, opacity: 0.4, dashArray: '5, 10' }).addTo(activeLayers);
+                        const isPie = stop.tipoTransporte === 'pie';
+                        L.polyline([prevPos, pos], {
+                            color: isPie ? '#10b981' : color,
+                            weight: isPie ? 4 : 5,
+                            opacity: 0.75,
+                            dashArray: isPie ? '8, 12' : null
+                        }).addTo(activeLayers);
                     }
                 });
             });
 
             if (filtered.length > 0) {
-                try {
-                    map.fitBounds(activeLayers.getBounds(), { padding: [50, 50] });
-                } catch(e) {}
+                try { map.fitBounds(activeLayers.getBounds(), { padding: [50, 50] }); } catch(e) {}
             }
         }
 
         const daySelect = document.getElementById('daySelect');
         routeSelect.onchange = render;
         daySelect.onchange = render;
-        
         render();
     </script>
 </body>
@@ -1089,6 +1076,7 @@ function MapsView({ result, rules, selectedRoute, setSelectedRoute, selectedDay,
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    showToast('Mapa HTML exportado exitosamente', 'success');
   };
 
   const center: [number, number] = filteredRoutes[0]?.paradas[0] 
@@ -1163,223 +1151,185 @@ function MapsView({ result, rules, selectedRoute, setSelectedRoute, selectedDay,
             ))}
           </div>
         </div>
+
+        {/* V6.7: Transport Legend */}
+        <div className="border border-slate-100 rounded-xl p-3 bg-slate-50">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Leyenda de Transporte</p>
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-2">
+              <svg width="28" height="6" viewBox="0 0 28 6">
+                <line x1="0" y1="3" x2="28" y2="3" stroke="#10b981" strokeWidth="3" strokeDasharray="6,5" />
+              </svg>
+              <span className="text-[11px] font-semibold text-slate-600">🚶 A pie (≤{rules?.distanciaCaminableKm ?? 0.8} km)</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <svg width="28" height="6" viewBox="0 0 28 6">
+                <line x1="0" y1="3" x2="28" y2="3" stroke="#4f46e5" strokeWidth="3" />
+              </svg>
+              <span className="text-[11px] font-semibold text-slate-600">🚌 Bus/Carro (&gt;{rules?.distanciaCaminableKm ?? 0.8} km)</span>
+            </div>
+          </div>
+        </div>
+
         <div className="flex-1 overflow-y-auto mt-2 space-y-2 pr-1">
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Secuencia de Visita</p>
-          {filteredRoutes.flatMap((r: any) => r.paradas.map((p: any) => ({ ...p, dia: r.dia }))).map((p: any, i: number) => (
-            <div key={i} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center gap-3 hover:border-indigo-200 transition-colors cursor-default group">
-              <div className="w-6 h-6 bg-white border border-slate-200 rounded-full flex items-center justify-center text-[10px] font-bold text-indigo-600 shadow-sm group-hover:bg-indigo-600 group-hover:text-white transition-colors">{i+1}</div>
+          {filteredRoutes.flatMap((r: any, rIdx: number) => r.paradas.map((p: any) => ({ ...p, dia: r.dia, _routeColor: ROUTE_COLORS[rIdx % ROUTE_COLORS.length] }))).map((p: any, i: number) => (
+            <div key={i} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-start gap-3 hover:border-indigo-200 transition-colors cursor-default group">
+              <div className="w-6 h-6 bg-white border border-slate-200 rounded-full flex items-center justify-center text-[10px] font-bold text-indigo-600 shadow-sm group-hover:bg-indigo-600 group-hover:text-white transition-colors shrink-0 mt-0.5">{i+1}</div>
               <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-bold truncate text-slate-800">{p.pdv.pdv}</p>
-                  {selectedDay === null && (
-                    <span className="text-[8px] font-black bg-slate-200 px-1 rounded text-slate-500">
-                      {['', 'L', 'M', 'M', 'J', 'V', 'S'][p.dia]}
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 mt-1">
-                  <span className="text-[9px] font-bold text-slate-400 flex items-center gap-1 uppercase tracking-tighter"><Clock size={10} className="text-indigo-400"/> {p.horaLlegada}-{p.horaSalida}</span>
-                  <span className={`text-[9px] font-bold flex items-center gap-1 uppercase tracking-tighter ${p.tipoTransporte === 'pie' ? 'text-emerald-500' : 'text-blue-500'}`}>
-                    {p.tipoTransporte === 'pie' ? <Navigation size={8} /> : <Truck size={8} />} {p.tipoTransporte}
+                <p className="text-xs font-bold text-slate-800 truncate">{p.pdv?.pdv}</p>
+                <p className="text-[10px] text-slate-400 truncate">{p.horaLlegada} → {p.horaSalida}</p>
+                <div className="flex items-center gap-1.5 mt-1">
+                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                    p.tipoTransporte === 'pie'
+                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                      : 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                  }`}>
+                    {p.tipoTransporte === 'pie' ? '🚶 pie' : '🚌 bus'}
                   </span>
+                  <span className="text-[9px] text-slate-400">{p.distanciaPreviaKm?.toFixed(2)} km · {p.tiempoTrasladoMin?.toFixed(0)} min</span>
                 </div>
               </div>
             </div>
           ))}
         </div>
       </div>
-      <div className="lg:col-span-3 bg-white rounded-2xl border border-slate-200 overflow-hidden relative shadow-inner z-10">
-        <MapContainer center={center} zoom={13} style={{ height: '100%', width: '100%' }}>
-          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+
+      {/* Map Panel */}
+      <div className="lg:col-span-3 rounded-2xl overflow-hidden border border-slate-200 shadow-sm">
+        <MapContainer center={center} zoom={12} style={{ height: '100%', width: '100%' }} scrollWheelZoom={true}>
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
           <MapBoundsHandler filteredRoutes={filteredRoutes} />
-          {filteredRoutes.map((r: any) => (
-            <React.Fragment key={`${r.rutaNombre}-${r.dia}`}>
-              {r.paradas.map((p: any, i: number) => (
-                <React.Fragment key={i}>
-                  {p.geometry ? (
-                    <GeoJSON 
-                      key={`geo-${r.rutaNombre}-${i}-${p.pdv.id}`}
-                      data={p.geometry} 
-                      style={{ 
-                        color: p.tipoTransporte === 'pie' ? '#10b981' : '#4f46e5', 
-                        weight: p.tipoTransporte === 'pie' ? 5 : 4, 
-                        opacity: 0.9,
-                        dashArray: p.tipoTransporte === 'pie' ? '8, 12' : undefined
-                      }} 
-                    />
-                  ) : (
-                    i > 0 && (
-                      <Polyline 
-                        positions={[
-                          [r.paradas[i-1].pdv.latitud, r.paradas[i-1].pdv.longitud],
-                          [p.pdv.latitud, p.pdv.longitud]
-                        ]} 
-                        color={p.tipoTransporte === 'pie' ? '#10b981' : '#4f46e5'} 
-                        weight={p.tipoTransporte === 'pie' ? 5 : 3} 
-                        opacity={0.7} 
-                        dashArray={p.tipoTransporte === 'pie' ? '8, 12' : undefined} 
-                      />
-                    )
-                  )}
-                  <Marker 
-                    position={[p.pdv.latitud, p.pdv.longitud]}
-                    icon={L.divIcon({
-                      className: 'custom-div-icon',
-                      html: `<div style="background-color: #4f46e5; color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3); line-height: 20px;">${i + 1}</div>`,
-                      iconSize: [24, 24],
-                      iconAnchor: [12, 12]
-                    })}
-                  >
-                    <Popup>
-                      <div className="p-1 min-w-[120px]">
-                        <h5 className="font-bold text-indigo-600 m-0 text-xs tracking-tight uppercase">{p.pdv.pdv}</h5>
-                        <p className="text-[10px] text-slate-500 m-0 mt-1 italic">{p.pdv.direccion}</p>
-                        <div className="mt-2 border-t border-slate-100 pt-2 flex flex-col gap-1.5">
-                          <div className="flex justify-between text-[9px] font-bold"><span className="text-slate-400 uppercase tracking-tighter">LLEGADA:</span> <span className="text-slate-800">{p.horaLlegada}</span></div>
-                          <div className="flex justify-between text-[9px] font-bold"><span className="text-slate-400 uppercase tracking-tighter">SALIDA:</span> <span className="text-slate-800">{p.horaSalida}</span></div>
-                          <div className="flex justify-between text-[9px] font-bold border-t border-slate-50 pt-1"><span className="text-slate-400 uppercase tracking-tighter">TRAMO:</span> <span className="text-indigo-600">{p.distanciaPreviaKm.toFixed(2)} KM</span></div>
-                        </div>
-                      </div>
-                    </Popup>
-                  </Marker>
-                </React.Fragment>
-              ))}
-            </React.Fragment>
-          ))}
+          {filteredRoutes.map((ruta: any, rIdx: number) => {
+            const routeColor = ROUTE_COLORS[rIdx % ROUTE_COLORS.length];
+            return ruta.paradas.map((stop: any, sIdx: number) => (
+              <React.Fragment key={`${ruta.rutaNombre}-${ruta.dia}-${sIdx}`}>
+                {/* Marker */}
+                <Marker position={[stop.pdv.latitud, stop.pdv.longitud]}>
+                  <Popup>
+                    <div className="text-xs">
+                      <p className="font-bold" style={{ color: routeColor }}>{stop.pdv.pdv}</p>
+                      <p>Orden: {sIdx + 1}</p>
+                      <p>Llegada: {stop.horaLlegada} | Salida: {stop.horaSalida}</p>
+                      <p>Transporte: {stop.tipoTransporte === 'pie' ? '🚶 A pie' : '🚌 Bus/Carro'}</p>
+                      <p>Tramo: {stop.distanciaPreviaKm?.toFixed(2)} km ({stop.tiempoTrasladoMin?.toFixed(0)} min)</p>
+                      {stop.pdv.direccion && <p className="text-slate-500">{stop.pdv.direccion}</p>}
+                    </div>
+                  </Popup>
+                </Marker>
+
+                {/* V6.7 Hybrid Polyline — geometry or straight-line fallback */}
+                {stop.geometry?.coordinates ? (
+                  <Polyline
+                    positions={stop.geometry.coordinates.map((c: number[]) => [c[1], c[0]] as [number, number])}
+                    pathOptions={getPolylineOptions(stop.tipoTransporte, routeColor)}
+                  />
+                ) : sIdx > 0 ? (
+                  <Polyline
+                    positions={[
+                      [ruta.paradas[sIdx - 1].pdv.latitud, ruta.paradas[sIdx - 1].pdv.longitud],
+                      [stop.pdv.latitud, stop.pdv.longitud]
+                    ]}
+                    pathOptions={getPolylineOptions(stop.tipoTransporte, routeColor)}
+                  />
+                ) : null}
+              </React.Fragment>
+            ));
+          })}
         </MapContainer>
-        <div className="absolute top-4 right-4 z-20 flex flex-col gap-2">
-           <div className="bg-white/80 backdrop-blur-sm px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm text-[10px] font-bold uppercase tracking-widest text-slate-600">
-             Zona: <span className="text-indigo-600 underline">Distrito Metropolitano</span>
-           </div>
-        </div>
       </div>
     </div>
   );
 }
 
-function OmittedView({ omitidos }: { omitidos: any[] }) {
-  if (omitidos.length === 0) return (
-    <div className="bg-white p-12 rounded-2xl border border-slate-200 text-center">
-      <div className="w-16 h-16 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
-        <CheckCircle2 size={32} />
-      </div>
-      <h3 className="text-lg font-bold">¡100% de Cumplimiento!</h3>
-      <p className="text-slate-500">Todos los puntos de venta fueron programados exitosamente.</p>
-    </div>
-  );
-
+function OmittedView({ omitidos }: any) {
   return (
     <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
-      <table className="w-full text-left text-sm">
-        <thead className="bg-slate-50 border-b border-slate-100">
-          <tr>
-            <th className="p-4 font-bold text-slate-400">Día</th>
-            <th className="p-4 font-bold text-slate-400">Ruta</th>
-            <th className="p-4 font-bold text-slate-400">PDV</th>
-            <th className="p-4 font-bold text-slate-400">Motivo de Omisión</th>
-            <th className="p-4 font-bold text-slate-400">Coordenadas</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-50">
-          {omitidos.map((o, i) => (
-            <tr key={i} className="hover:bg-slate-50/50">
-              <td className="p-4 font-bold text-slate-600">{['', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sab'][o.dia]}</td>
-              <td className="p-4 font-medium text-slate-700">{o.pdv.ruta}</td>
-              <td className="p-4 text-slate-900 font-bold">{o.pdv.pdv}</td>
-              <td className="p-4">
-                <span className="px-3 py-1 bg-red-50 text-red-600 text-xs font-bold rounded-lg uppercase tracking-tight">{o.motivo}</span>
-              </td>
-              <td className="p-4 text-xs font-mono text-slate-400">{o.pdv.latitud.toFixed(4)}, {o.pdv.longitud.toFixed(4)}</td>
+      <div className="p-4 bg-slate-50 border-b border-slate-200">
+        <h4 className="font-bold text-slate-700 text-sm">PDVs Omitidos ({omitidos.length})</h4>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-white border-b border-slate-100">
+            <tr>
+              <th className="p-4 font-bold text-slate-400 text-[10px] uppercase tracking-widest">Día</th>
+              <th className="p-4 font-bold text-slate-400 text-[10px] uppercase tracking-widest">Ruta</th>
+              <th className="p-4 font-bold text-slate-400 text-[10px] uppercase tracking-widest">PDV</th>
+              <th className="p-4 font-bold text-slate-400 text-[10px] uppercase tracking-widest">Motivo</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="divide-y divide-slate-50">
+            {omitidos.map((o: any, i: number) => (
+              <tr key={i} className="hover:bg-red-50/30 transition-colors">
+                <td className="p-4 font-medium">{['Dom', 'Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab'][o.dia]}</td>
+                <td className="p-4 text-slate-600">{o.pdv?.ruta}</td>
+                <td className="p-4 font-semibold text-slate-800">{o.pdv?.pdv}</td>
+                <td className="p-4">
+                  <span className="px-2 py-1 bg-red-50 text-red-600 rounded-full text-[10px] font-bold">{o.motivo}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
 
-function CapacityView({ 
-  rules, 
-  setExternalResult, 
-  setActiveTab,
-  data,
-  setData,
-  groupBy,
-  setGroupBy,
-  isCalculating,
-  setIsCalculating,
-  capacityProgress,
-  setCapacityProgress,
-  capacityStatus,
-  setCapacityStatus,
-  localResult,
-  setLocalResult,
-  showToast
-}: any) {
-  const processFile = (file: File) => {
+function CapacityView({ rules, setExternalResult, setActiveTab, data, setData, groupBy, setGroupBy, isCalculating, setIsCalculating, capacityProgress, setCapacityProgress, capacityStatus, setCapacityStatus, localResult, setLocalResult, showToast }: any) {
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = (evt) => {
       try {
-        const bstr = event.target?.result;
-        const workbook = xlsx.read(bstr, { type: 'binary' });
-        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-        setData(xlsx.utils.sheet_to_json(firstSheet));
-        showToast('Archivo de capacidad cargado exitosamente', 'success');
+        const bstr = evt.target?.result;
+        const wb = xlsx.read(bstr, { type: 'binary' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const raw = xlsx.utils.sheet_to_json(ws);
+        setData(raw);
+        showToast(`${raw.length} PDVs cargados para dimensionamiento`, 'success');
       } catch (err: any) {
-        showToast(`Error al leer el archivo: ${err.message}`, 'error');
+        showToast(`Error al leer archivo: ${err.message}`, 'error');
       }
     };
     reader.readAsBinaryString(file);
   };
 
-  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) processFile(file);
-  };
-
-  const runCapacityAnalysis = async () => {
+  const runCapacityEstimate = async () => {
     if (!data) return;
     setIsCalculating(true);
     setCapacityProgress(0);
     setCapacityStatus('Iniciando...');
-    setLocalResult(null);
-    
+
     try {
-      console.log('Starting capacity analysis with:', { groupBy, pdvCount: data.length });
       const startResp = await fetch('/api/estimate-capacity', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ data, rules, groupBy })
       });
-      
-      if (!startResp.ok) {
-        const text = await startResp.text();
-        console.error('Server error response:', text);
-        throw new Error(`Error del servidor: ${startResp.status} ${startResp.statusText}`);
-      }
 
+      if (!startResp.ok) throw new Error(`Error: ${startResp.statusText}`);
       const { sessionId } = await startResp.json();
-      if (!sessionId) throw new Error('No se recibió Session ID');
+      showToast('Cálculo de dimensionamiento iniciado', 'info');
 
-      showToast('Tarea de dimensionamiento iniciada en segundo plano', 'info');
-
-      // Server-Sent Events (SSE) Stream
       const eventSource = new EventSource(`/api/progress/stream/${sessionId}`);
-      
       eventSource.onmessage = async (event) => {
         try {
           const status = JSON.parse(event.data);
           setCapacityProgress(status.progress);
           setCapacityStatus(status.status);
-          
+
           if (status.progress === 100) {
             eventSource.close();
             const finalResp = await fetch(`/api/results/${sessionId}`);
             const finalData = await finalResp.json();
             setLocalResult(finalData);
-            setExternalResult(finalData);
             setIsCalculating(false);
-            showToast('Dimensionamiento completado con éxito', 'success');
+            showToast('Dimensionamiento completado', 'success');
           } else if (status.status.startsWith('Error')) {
             eventSource.close();
             setIsCalculating(false);
@@ -1395,180 +1345,98 @@ function CapacityView({
       eventSource.onerror = () => {
         eventSource.close();
         setIsCalculating(false);
-        showToast('Error de conexión con el canal SSE', 'error');
+        showToast('Error de conexión SSE', 'error');
       };
-
     } catch (err: any) {
-      console.error('Capacity Error:', err);
-      showToast(`Error en el cálculo: ${err.message}`, 'error');
+      showToast(`Error: ${err.message}`, 'error');
       setIsCalculating(false);
     }
   };
 
-  const totals = data ? {
-    pdvs: data.length,
-    groups: new Set(data.map(d => d[groupBy] || 'Sin Definir')).size
-  } : null;
-
-  const result = localResult;
-
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-1 space-y-4">
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-            <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
-              <Settings size={16} className="text-indigo-500"/> Configuración
-            </h3>
-            
-            <div className="space-y-4">
-              <div>
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Agrupar Por</label>
-                <div className="flex gap-2">
-                  {(['Ciudad', 'Departamento'] as const).map(option => (
-                    <button
-                      key={option}
-                      onClick={() => setGroupBy(option)}
-                      className={`flex-1 py-2 rounded-lg text-xs font-bold border transition-all ${
-                        groupBy === option 
-                        ? 'bg-indigo-600 text-white border-indigo-600' 
-                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                      }`}
-                    >
-                      {option}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {!data ? (
-                <label 
-                  onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('border-indigo-500', 'bg-indigo-50/50'); }}
-                  onDragLeave={(e) => { e.preventDefault(); e.currentTarget.classList.remove('border-indigo-500', 'bg-indigo-50/50'); }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    e.currentTarget.classList.remove('border-indigo-500', 'bg-indigo-50/50');
-                    const file = e.dataTransfer.files?.[0];
-                    if (file) processFile(file);
-                  }}
-                  className="w-full h-32 border-2 border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:border-indigo-300 transition-all bg-slate-50 group"
-                >
-                  <Upload size={24} className="text-slate-400 group-hover:text-indigo-500 mb-2 transition-colors"/>
-                  <span className="text-xs font-bold text-slate-500 group-hover:text-indigo-600">Cargar / Arrastrar Archivo</span>
-                  <input type="file" className="hidden" accept=".xlsx, .xls" onChange={handleUpload} />
-                </label>
-              ) : (
-                <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-xl">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] font-bold text-emerald-600 uppercase">Archivo Cargado</span>
-                    <button onClick={() => setData(null)} className="text-[10px] font-bold text-emerald-700 underline">Cambiar</button>
-                  </div>
-                  <p className="text-xs font-bold text-emerald-800">{totals?.pdvs} PDVs detectados</p>
-                  <p className="text-[10px] text-emerald-600 mt-1">{totals?.groups} {groupBy}(es) únicos</p>
-                </div>
-              )}
-
-              <button 
-                disabled={!data || isCalculating}
-                onClick={runCapacityAnalysis}
-                className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-indigo-200 transition-all flex flex-col items-center justify-center gap-1"
-              >
-                {isCalculating ? (
-                  <div className="w-full flex flex-col items-center">
-                    <div className="flex items-center gap-2">
-                       <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> 
-                       <span>Calculando... {capacityProgress}%</span>
-                    </div>
-                    <div className="w-full h-1 bg-white/20 mt-2 rounded-full overflow-hidden">
-                       <div className="h-full bg-white transition-all duration-300" style={{ width: `${capacityProgress}%` }}></div>
-                    </div>
-                  </div>
-                ) : (
-                  <span className="flex items-center gap-2"><Calculator size={18} /> Iniciar Dimensionamiento</span>
-                )
-              }
-              </button>
-              {isCalculating && (
-                <p className="text-[10px] text-slate-500 text-center animate-pulse">{capacityStatus}</p>
-              )}
-            </div>
-          </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="md:col-span-2 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><Calculator size={16} className="text-indigo-500" /> Carga de PDVs para Dimensionamiento</h3>
+          <label className={`flex flex-col items-center justify-center p-8 rounded-xl border-2 border-dashed transition-all cursor-pointer ${
+            data ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 hover:border-indigo-300 bg-slate-50'
+          }`}>
+            <Upload size={32} className={data ? 'text-emerald-500' : 'text-slate-300'} />
+            <p className="mt-3 text-sm font-semibold text-slate-600">
+              {data ? `✓ ${data.length} PDVs cargados` : 'Seleccionar archivo Excel de PDVs'}
+            </p>
+            <input type="file" className="hidden" accept=".xlsx,.xls" onChange={handleFileUpload} />
+          </label>
         </div>
-
-        <div className="lg:col-span-2">
-          {result && result.summary && (
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden animate-in fade-in slide-in-from-right-4 duration-500">
-               <div className="bg-indigo-600 p-8 text-white">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <p className="text-indigo-100 text-xs font-bold uppercase tracking-widest mb-1">Resultado del Dimensionamiento</p>
-                      <h2 className="text-4xl font-black tracking-tighter">
-                        {result.summary.personasRequeridas !== undefined 
-                          ? `Se requieren ${result.summary.personasRequeridas} personas`
-                          : `Cálculo Completado`}
-                      </h2>
-                    </div>
-                    <div className="bg-white/20 p-3 rounded-xl backdrop-blur-md">
-                      <Calculator size={32} />
-                    </div>
-                  </div>
-                  <div className="mt-8 grid grid-cols-3 gap-6 border-t border-white/10 pt-6">
-                    <div>
-                      <p className="text-[10px] font-bold text-indigo-200 uppercase mb-1">Cobertura</p>
-                      <p className="text-xl font-bold">{result.summary.cobertura?.toFixed(1)}%</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] font-bold text-indigo-200 uppercase mb-1">Rutas Semanales</p>
-                      <p className="text-xl font-bold">{result.summary.totalRutas}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] font-bold text-indigo-200 uppercase mb-1">Horas Totales</p>
-                      <p className="text-xl font-bold">{result.summary.totalHoras?.toFixed(0)}h</p>
-                    </div>
-                  </div>
-               </div>
-               <div className="p-8 space-y-6">
-                  {result.omitidos && result.omitidos.length > 0 && (
-                    <div className="p-4 bg-amber-50 border border-amber-100 rounded-xl flex gap-3 text-amber-800 text-xs">
-                      <AlertCircle size={16} className="shrink-0 text-amber-500" />
-                      <div>
-                        <p className="font-bold mb-1">{result.omitidos.length} PDVs fueron omitidos</p>
-                        <p>Algunos puntos no pudieron ser visitados debido a restricciones de tiempo o distancia (Max Traslado: {rules.maxRelocalizacionMin} min).</p>
-                      </div>
-                    </div>
-                  )}
-                  <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-xl border border-slate-100">
-                    <Info size={20} className="text-indigo-500 shrink-0" />
-                    <p className="text-sm text-slate-600 leading-relaxed italic">
-                      "Este cálculo contempla la optimización geográfica real punto a punto utilizando OSRM. Las rutas resultantes han sido particionadas para no exceder las {rules.maxHorasSemanales}h semanales por recurso."
-                    </p>
-                  </div>
-                  <div className="flex gap-4">
-                    <button 
-                      onClick={() => setActiveTab('maps')}
-                      className="flex-1 bg-slate-900 text-white py-4 rounded-xl font-bold hover:bg-slate-800 transition-all flex items-center justify-center gap-2"
-                    >
-                      <MapIcon size={18} /> Ver Rutas Sugeridas
-                    </button>
-                    <button 
-                      onClick={() => setActiveTab('dashboard')}
-                      className="flex-1 border border-slate-200 text-slate-700 py-4 rounded-xl font-bold hover:bg-slate-50 transition-all flex items-center justify-center gap-2"
-                    >
-                      <BarChart3 size={18} /> Ver Métricas de Costo
-                    </button>
-                  </div>
-               </div>
-            </div>
-          )}
-          {!data && !result && (
-            <div className="h-full min-h-[400px] bg-white rounded-2xl border border-slate-200 border-dashed flex flex-col items-center justify-center text-slate-400 text-center p-12">
-              <Calculator size={48} className="mb-4 opacity-20" />
-              <p className="font-bold text-slate-600">Espera de datos...</p>
-              <p className="text-xs max-w-xs mt-2">Sube tu archivo de preventa para calcular la cantidad óptima de personas necesarias para cubrir la operación.</p>
-            </div>
-          )}
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <h3 className="font-bold text-slate-800 mb-4">Configuración</h3>
+          <div className="mb-4">
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Agrupar por</label>
+            <select 
+              value={groupBy}
+              onChange={e => setGroupBy(e.target.value as 'Ciudad' | 'Departamento')}
+              className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-semibold"
+            >
+              <option value="Ciudad">Ciudad</option>
+              <option value="Departamento">Departamento</option>
+            </select>
+          </div>
+          <button 
+            onClick={runCapacityEstimate}
+            disabled={!data || isCalculating}
+            className={`w-full py-2.5 rounded-xl font-bold text-sm transition-all ${
+              !data || isCalculating ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95 shadow-sm'
+            }`}
+          >
+            {isCalculating ? `Calculando ${capacityProgress}%...` : 'Calcular Dimensionamiento'}
+          </button>
         </div>
       </div>
+
+      {localResult && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <StatCard label="PDVs Analizados" value={localResult.summary.totalPdvs.toString()} icon={<MapPin className="text-emerald-500" />} color="emerald" />
+          <StatCard label="Personas Requeridas" value={localResult.summary.personasRequeridas.toString()} icon={<Calculator size={18} className="text-indigo-500" />} color="indigo" />
+          <StatCard label="Cobertura" value={`${localResult.summary.cobertura.toFixed(0)}%`} icon={<CheckCircle2 className="text-blue-500" />} color="blue" />
+          <StatCard label="Total KM" value={`${localResult.summary.totalKm.toFixed(0)} km`} icon={<Navigation className="text-orange-500" />} color="orange" />
+          <div className="col-span-full flex gap-3">
+            <button 
+              onClick={() => { setExternalResult(localResult); setActiveTab('maps'); }}
+              className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-semibold text-sm hover:bg-indigo-700 transition-all flex items-center gap-2"
+            >
+              <MapIcon size={14} /> Ver en Mapa
+            </button>
+            <button 
+              onClick={() => {
+                const data: any[] = [];
+                localResult.rutas.forEach((ruta: any) => {
+                  ruta.paradas.forEach((stop: any, idx: number) => {
+                    data.push({
+                      'Persona': ruta.personId || ruta.rutaNombre,
+                      'Ruta': ruta.rutaNombre,
+                      'Día': ['-','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'][ruta.dia] || ruta.dia,
+                      'Orden': idx + 1,
+                      'PDV': stop.pdv.pdv,
+                      'Ciudad': stop.pdv.ciudad,
+                      'Departamento': stop.pdv.departamento,
+                      'Llegada': stop.horaLlegada,
+                      'Salida': stop.horaSalida,
+                      'Km': stop.distanciaPreviaKm.toFixed(2)
+                    });
+                  });
+                });
+                const ws = xlsx.utils.json_to_sheet(data);
+                const wb = xlsx.utils.book_new();
+                xlsx.utils.book_append_sheet(wb, ws, 'Dimensionamiento');
+                xlsx.writeFile(wb, `Dimensionamiento_${new Date().getTime()}.xlsx`);
+              }}
+              className="px-4 py-2 border border-slate-300 rounded-lg font-semibold text-sm hover:bg-slate-50 transition-all flex items-center gap-2"
+            >
+              <Download size={14} /> Exportar Excel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
