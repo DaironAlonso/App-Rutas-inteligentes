@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+/* Sistema de Colores Dinámico con Variables CSS */
+:root {
+  --bg-app: #f8fafc;
+  --bg-card: #ffffff;
+  --bg-sidebar: #ffffff;
+  --text-main: #0f172a;
+  --text-muted: #64748b;
+  --border-color: #e2e8f0;
+  --bg-input: #f8fafc;
+}
+
+html.dark {
+  --bg-app: #0f172a;
+  --bg-card: #1e293b;
+  --bg-sidebar: #0f172a;
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
+  --border-color: #334155;
+  --bg-input: #0f172a;
+}
+
+/* Transiciones globales suaves para cambios de tema */
+body {
+  background-color: var(--bg-app);
+  color: var(--text-main);
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+}
+
+/* Anulaciones estéticas para forzar tema oscuro fluido */
+html.dark .bg-slate-50 {
+  background-color: var(--bg-app) !important;
+}
+
+html.dark .bg-white {
+  background-color: var(--bg-card) !important;
+}
+
+html.dark .border-slate-200, 
+html.dark .border-slate-100 {
+  border-color: var(--border-color) !important;
+}
+
+html.dark .text-slate-900, 
+html.dark .text-slate-800,
+html.dark .text-slate-700 {
+  color: var(--text-main) !important;
+}
+
+html.dark .text-slate-600, 
+html.dark .text-slate-500, 
+html.dark .text-slate-400 {
+  color: var(--text-muted) !important;
+}
+
+html.dark .bg-slate-900 {
+  background-color: var(--bg-sidebar) !important;
+}
+
+html.dark input, 
+html.dark select {
+  background-color: var(--bg-input) !important;
+  color: var(--text-main) !important;
+  border-color: var(--border-color) !important;
+}
+
+html.dark .bg-slate-100 {
+  background-color: var(--bg-input) !important;
+}
+
+/* Estilos de scrollbar oscuros */
+html.dark ::-webkit-scrollbar-track {
+  background: var(--bg-app);
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 4px;
+}

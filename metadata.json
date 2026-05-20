@@ -1,0 +1,12 @@
+{
+  "name": "SmartRoute AI - Planificador Inteligente de Visitas",
+  "description": "Sistema profesional de optimización de rutas comerciales con validación de jornada laboral, gestión de almuerzos y generación de mapas interactivos.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "Excel Processing",
+    "Route Optimization",
+    "Interactive Mapping"
+  ]
+}
