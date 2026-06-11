@@ -15,6 +15,7 @@ export interface BusinessRules {
   sabadoPermanenciaFija: number;
   maxRelocalizacionMin: number;
   centroPunto: [number, number];
+  base_url_osrm?: string;
 }
 
 export interface PDV {
@@ -26,6 +27,7 @@ export interface PDV {
   dias: string; // "1,3,5"
   frecuencia: number;
   tiempoVisita: number;
+  semanasMes?: string;
   direccion?: string;
   ciudad?: string;
   departamento?: string;
@@ -37,12 +39,13 @@ export interface RouteStop {
   horaSalida: string;
   distanciaPreviaKm: number;
   tiempoTrasladoMin: number;
-  tipoTransporte: 'pie' | 'bus';
+  tipoTransporte: 'pie' | 'carro' | 'bus';
   geometry?: any; // To store routing geometry
 }
 
 export interface DailyRoute {
   dia: number; // 1-6
+  semanaMes?: number | null;
   rutaNombre: string;
   paradas: RouteStop[];
   horasTrabajadas: number;
@@ -62,5 +65,9 @@ export interface ProcessingResult {
     totalHoras: number;
     cobertura: number;
     personasRequeridas?: number;
+    personasPorHoras?: number;
+    personasPorRutas?: number;
+    horasPorPersonaPromedio?: number;
+    frecuenciaPeriodo?: 'week' | 'month';
   };
 }

@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "backend": "cd optimizer-service && python -m uvicorn main:app --host 127.0.0.1 --port 8000",
+    "dev:full": "concurrently \"npm run backend\" \"npm run dev\"",
     "build": "vite build",
     "start": "vite preview",
     "lint": "tsc --noEmit"

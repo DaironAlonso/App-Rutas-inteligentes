@@ -65,7 +65,22 @@ const DEFAULT_RULES: BusinessRules = {
   sabadoMaxPdvs: 2,
   sabadoPermanenciaFija: 198,
   maxRelocalizacionMin: 120,
-  centroPunto: [4.6097, -74.0817]
+  centroPunto: [4.6097, -74.0817],
+  base_url_osrm: "http://127.0.0.1:5000"
+};
+
+const DAY_NAMES = ['Domingo', 'Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado'];
+const DAY_SHORT = ['Dom', 'Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab'];
+
+const isWalkingTransport = (transport?: string) => transport === 'pie';
+const transportLabel = (transport?: string) => isWalkingTransport(transport) ? 'A pie' : 'Carro';
+const transportStyle = (transport?: string) => isWalkingTransport(transport) ? { dashArray: '8, 12' } : {};
+const omissionAction = (motivo?: string) => {
+  const text = (motivo || '').toLowerCase();
+  if (text.includes('traslado')) return 'Reasignar a una zona/persona mas cercana o revisar coordenadas.';
+  if (text.includes('jornada') || text.includes('tiempo')) return 'Reducir permanencia, mover a otro dia o agregar capacidad.';
+  if (text.includes('sabado')) return 'Mover visita a lunes-viernes o aumentar regla de sabado.';
+  return 'Revisar regla operativa y datos del PDV.';
 };
 
 export default function App() {
@@ -82,6 +97,7 @@ export default function App() {
   // Capacity Analysis State (Persistent)
   const [capacityPdvData, setCapacityPdvData] = useState<any[] | null>(null);
   const [capacityGroupBy, setCapacityGroupBy] = useState<'Ciudad' | 'Departamento'>('Ciudad');
+  const [capacityFrequencyPeriod, setCapacityFrequencyPeriod] = useState<'week' | 'month'>('week');
   const [isCalculatingCapacity, setIsCalculatingCapacity] = useState(false);
   const [capacityProgress, setCapacityProgress] = useState(0);
   const [capacityStatus, setCapacityStatus] = useState('');
@@ -207,35 +223,67 @@ export default function App() {
 
   const downloadExcel = () => {
     if (!result) return;
+
+    const resumen = [{
+      Total_PDVs: result.summary.totalPdvs,
+      PDVs_Programados: result.summary.totalPdvs - result.omitidos.length,
+      PDVs_Omitidos: result.omitidos.length,
+      Cobertura_Pct: result.summary.cobertura.toFixed(1),
+      Total_Rutas: result.summary.totalRutas,
+      Total_Km: result.summary.totalKm.toFixed(2),
+      Total_Horas: result.summary.totalHoras.toFixed(2),
+      Personal_Requerido: result.summary.personasRequeridas || Math.ceil(result.summary.totalHoras / rules.maxHorasSemanales),
+      Personal_por_Horas: result.summary.personasPorHoras || Math.ceil(result.summary.totalHoras / rules.maxHorasSemanales),
+      Personal_por_Rutas: result.summary.personasPorRutas || Math.ceil(result.summary.totalRutas / 6),
+      Umbral_Caminable_Km: rules.distanciaCaminableKm
+    }];
     
     // Hoja 1: Itinerario Completo
     const ws_itinerary = xlsx.utils.json_to_sheet(result.rutas.flatMap(r => 
       r.paradas.map((p, index) => ({
-        Dia: ['Dom', 'Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab'][r.dia],
+        Semana_Mes: (r as any).semanaMes || '',
+        Dia: DAY_SHORT[r.dia],
         Ruta: r.rutaNombre,
+        Persona: (r as any).personId || '',
         Orden_Visita: index + 1,
         PDV: p.pdv.pdv,
         Direccion: p.pdv.direccion,
         Llegada: p.horaLlegada,
         Salida: p.horaSalida,
-        Transporte: p.tipoTransporte,
+        Transporte: transportLabel(p.tipoTransporte),
         Distancia_Tramo_Km: p.distanciaPreviaKm.toFixed(2),
         Tiempo_Traslado_Min: p.tiempoTrasladoMin.toFixed(0),
         Permanencia_Min: r.dia === 6 ? rules.sabadoPermanenciaFija : (p.pdv.tiempoVisita || rules.permanenciaDefaultMin)
       }))
     ));
 
+    const ws_by_route = xlsx.utils.json_to_sheet(result.rutas.map(r => ({
+      Semana_Mes: (r as any).semanaMes || '',
+      Dia: DAY_SHORT[r.dia],
+      Ruta: r.rutaNombre,
+      Persona: (r as any).personId || '',
+      PDVs_Visitados: r.paradas.length,
+      Km: r.kmTotales.toFixed(2),
+      Horas: r.horasTrabajadas.toFixed(2),
+      Tramos_A_Pie: r.paradas.filter(p => isWalkingTransport(p.tipoTransporte)).length,
+      Tramos_En_Carro: r.paradas.filter(p => !isWalkingTransport(p.tipoTransporte)).length
+    })));
+
     // Hoja 2: PDVs Omitidos
     const ws_omitted = xlsx.utils.json_to_sheet(result.omitidos.map(o => ({
-      Dia: ['Dom', 'Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab'][o.dia],
+      Dia: DAY_SHORT[o.dia],
+      Semana_Mes: (o as any).semanaMes || '',
       Ruta: o.pdv.ruta,
       PDV: o.pdv.pdv,
       Motivo: o.motivo,
+      Accion_Sugerida: omissionAction(o.motivo),
       Coordenadas: `${o.pdv.latitud}, ${o.pdv.longitud}`
     })));
 
     const wb = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet(resumen), "Resumen");
     xlsx.utils.book_append_sheet(wb, ws_itinerary, "Itinerarios");
+    xlsx.utils.book_append_sheet(wb, ws_by_route, "KPIs_Ruta_Dia");
     xlsx.utils.book_append_sheet(wb, ws_omitted, "PDVs_Omitidos");
     
     xlsx.writeFile(wb, `Planificacion_Global_Rutas_${format(new Date(), 'yyyyMMdd')}.xlsx`);
@@ -446,6 +494,8 @@ export default function App() {
               setData={setCapacityPdvData}
               groupBy={capacityGroupBy}
               setGroupBy={setCapacityGroupBy}
+              frequencyPeriod={capacityFrequencyPeriod}
+              setFrequencyPeriod={setCapacityFrequencyPeriod}
               isCalculating={isCalculatingCapacity}
               setIsCalculating={setIsCalculatingCapacity}
               capacityProgress={capacityProgress}
@@ -545,6 +595,19 @@ function ConfigView({ rules, setRules }: any) {
         />
         <p className="text-[10px] text-slate-400 mt-2 italic">
           Coordenada base para el inicio de las rutas y centro del mapa exportado.
+        </p>
+      </ConfigCard>
+
+      <ConfigCard title="Servicio de Ruteo (OSRM)" icon={<MapIcon className="text-indigo-500" />}>
+        <Input 
+          label="URL del Servidor OSRM" 
+          value={rules.base_url_osrm || "http://127.0.0.1:5000"} 
+          onChange={e => updateRule('base_url_osrm', e.target.value)} 
+          type="text" 
+          placeholder="http://127.0.0.1:5000"
+        />
+        <p className="text-[10px] text-slate-400 mt-2 italic">
+          Dirección del servidor OSRM local (levantado mediante Docker en el puerto 5000) utilizado para calcular distancias, tiempos reales y dibujar trazos en los mapas Leaflet.
         </p>
       </ConfigCard>
     </div>
@@ -670,11 +733,12 @@ function DashboardView({ result }: { result: ProcessingResult }) {
     { name: 'Omitidos', value: result.omitidos.length },
   ];
   const COLORS = ['#4f46e5', '#f1f5f9'];
+  const personalRequerido = result.summary.personasRequeridas || Math.ceil(result.summary.totalHoras / 42);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
       <StatCard label="PDVs Programados" value={(result.summary.totalPdvs - result.omitidos.length).toString()} icon={<CheckCircle2 className="text-emerald-500" />} color="emerald" />
-      <StatCard label="Personal Requerido" value={(result.summary.personasRequeridas || Math.ceil(result.summary.totalRutas / 6)).toString()} icon={<Calculator size={18} className="text-indigo-500" />} color="indigo" />
+      <StatCard label="Personal Requerido" value={personalRequerido.toString()} icon={<Calculator size={18} className="text-indigo-500" />} color="indigo" />
       <StatCard label="Recorrido Total" value={`${result.summary.totalKm.toFixed(1)} KM`} icon={<Navigation className="text-blue-500" />} color="blue" />
       <StatCard label="Horas Operativas" value={`${result.summary.totalHoras.toFixed(1)} H`} icon={<Clock className="text-orange-500" />} color="orange" />
 
@@ -686,7 +750,7 @@ function DashboardView({ result }: { result: ProcessingResult }) {
         <div className="h-[300px]">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={result.rutas.reduce((acc: any[], r) => {
-              const day = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'][r.dia];
+              const day = DAY_SHORT[r.dia];
               const existing = acc.find(x => x.day === day);
               if (existing) existing.km += r.kmTotales;
               else acc.push({ day, km: r.kmTotales });
@@ -751,6 +815,8 @@ function StatCard({ label, value, icon, color }: any) {
 }
 
 function MapsView({ result, rules, selectedRoute, setSelectedRoute, selectedDay, setSelectedDay, showToast }: any) {
+  const [mapMode, setMapMode] = useState<'interactive' | 'real'>('interactive');
+
   const filteredRoutes = result.rutas.filter((r: any) => 
     (!selectedRoute || r.rutaNombre === selectedRoute) && (selectedDay === null || r.dia === selectedDay)
   );
@@ -776,10 +842,11 @@ function MapsView({ result, rules, selectedRoute, setSelectedRoute, selectedDay,
             departamento: stop.pdv.departamento,
             orden: idx + 1,
             ruta: ruta.rutaNombre,
-            dia: ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'][ruta.dia] || ruta.dia,
+            dia: DAY_NAMES[ruta.dia] || ruta.dia,
             horaLlegada: stop.horaLlegada,
             horaSalida: stop.horaSalida,
-            tipoTransporte: stop.tipoTransporte,
+            tipoTransporte: transportLabel(stop.tipoTransporte),
+            estiloTramo: isWalkingTransport(stop.tipoTransporte) ? 'punteado' : 'continuo',
             distanciaPreviaKm: stop.distanciaPreviaKm
           }
         });
@@ -791,8 +858,9 @@ function MapsView({ result, rules, selectedRoute, setSelectedRoute, selectedDay,
             geometry: stop.geometry,
             properties: {
               ruta: ruta.rutaNombre,
-              dia: ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'][ruta.dia] || ruta.dia,
-              tipoTransporte: stop.tipoTransporte,
+              dia: DAY_NAMES[ruta.dia] || ruta.dia,
+              tipoTransporte: transportLabel(stop.tipoTransporte),
+              estiloTramo: isWalkingTransport(stop.tipoTransporte) ? 'punteado' : 'continuo',
               tramo: idx + 1,
               distanciaKm: stop.distanciaPreviaKm
             }
@@ -843,7 +911,7 @@ function MapsView({ result, rules, selectedRoute, setSelectedRoute, selectedDay,
       // Add track for route paths
       gpx += `
   <trk>
-    <name>${ruta.rutaNombre} - ${['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'][ruta.dia] || ruta.dia}</name>
+    <name>${ruta.rutaNombre} - ${DAY_NAMES[ruta.dia] || ruta.dia}</name>
     <desc>Distancia: ${ruta.kmTotales?.toFixed(2)} km</desc>
     <trkseg>`;
       
@@ -886,13 +954,15 @@ function MapsView({ result, rules, selectedRoute, setSelectedRoute, selectedDay,
       ruta.paradas.forEach((stop: any, idx: number) => {
         data.push({
           'Ruta/Persona': ruta.rutaNombre,
-          'Día': ['-', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'][ruta.dia] || ruta.dia,
+          'Dia': DAY_NAMES[ruta.dia] || ruta.dia,
+          'Semana Mes': ruta.semanaMes || '',
           'Orden': idx + 1,
           'PDV': stop.pdv.pdv,
-          'Dirección': stop.pdv.direccion,
+          'Direccion': stop.pdv.direccion,
           'Ciudad': stop.pdv.ciudad,
           'Llegada': stop.horaLlegada,
           'Salida': stop.horaSalida,
+          'Transporte': transportLabel(stop.tipoTransporte),
           'Tiempo Visita (min)': stop.pdv.tiempoVisita,
           'Km Recorridos': stop.distanciaPreviaKm.toFixed(2),
           'Latitud': stop.pdv.latitud,
@@ -932,6 +1002,9 @@ function MapsView({ result, rules, selectedRoute, setSelectedRoute, selectedDay,
         select { padding: 0.5rem; border-radius: 0.5rem; border: 1px solid #cbd5e1; font-size: 0.875rem; min-width: 200px; }
         #map { flex: 1; width: 100%; }
         .legend { background: white; padding: 10px; border-radius: 5px; box-shadow: 0 0 15px rgba(0,0,0,0.2); line-height: 1.5; font-size: 12px; }
+        .legend-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+        .legend-line { width: 34px; border-top: 4px solid #4f46e5; }
+        .legend-line.walk { border-top-style: dashed; border-color: #10b981; }
     </style>
 </head>
 <body>
@@ -1038,8 +1111,9 @@ function MapsView({ result, rules, selectedRoute, setSelectedRoute, selectedDay,
                                 <b>Orden:</b> \${sIdx + 1}<br/>
                                 <b>Llegada:</b> \${stop.horaLlegada}<br/>
                                 <b>Salida:</b> \${stop.horaSalida}<br/>
+                                <b>Transporte:</b> \${stop.tipoTransporte === 'pie' ? 'A pie' : 'Carro'}<br/>
                                 <b>Viaje:</b> \${stop.distanciaPreviaKm.toFixed(2)} km (\${stop.tiempoTrasladoMin.toFixed(0)} min)<br/>
-                                <b>Dirección:</b> \${stop.pdv.direccion}
+                                <b>Direccion:</b> \${stop.pdv.direccion}
                             </div>
                         </div>
                     \`);
@@ -1055,11 +1129,11 @@ function MapsView({ result, rules, selectedRoute, setSelectedRoute, selectedDay,
                         }).addTo(activeLayers);
                     } else if (sIdx === 0 && manualStartPoint) {
                         // First stop to Depot
-                        L.polyline([manualStartPoint, pos], { color: color, weight: 3, opacity: 0.4, dashArray: '5, 10' }).addTo(activeLayers);
+                        L.polyline([manualStartPoint, pos], { color: color, weight: 3, opacity: 0.4, dashArray: stop.tipoTransporte === 'pie' ? '5, 10' : null }).addTo(activeLayers);
                     } else if (sIdx > 0) {
                         // Fallback straight line between stops
                         const prevPos = [r.paradas[sIdx-1].pdv.latitud, r.paradas[sIdx-1].pdv.longitud];
-                        L.polyline([prevPos, pos], { color: color, weight: 3, opacity: 0.4, dashArray: '5, 10' }).addTo(activeLayers);
+                        L.polyline([prevPos, pos], { color: color, weight: 3, opacity: 0.4, dashArray: stop.tipoTransporte === 'pie' ? '5, 10' : null }).addTo(activeLayers);
                     }
                 });
             });
@@ -1074,6 +1148,13 @@ function MapsView({ result, rules, selectedRoute, setSelectedRoute, selectedDay,
         const daySelect = document.getElementById('daySelect');
         routeSelect.onchange = render;
         daySelect.onchange = render;
+        const legend = L.control({position: 'bottomright'});
+        legend.onAdd = function() {
+            const div = L.DomUtil.create('div', 'legend');
+            div.innerHTML = '<strong>Tipo de tramo</strong><div class="legend-row"><span class="legend-line walk"></span>A pie</div><div class="legend-row"><span class="legend-line"></span>Carro</div>';
+            return div;
+        };
+        legend.addTo(map);
         
         render();
     </script>
@@ -1099,7 +1180,7 @@ function MapsView({ result, rules, selectedRoute, setSelectedRoute, selectedDay,
     <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 h-[calc(100vh-280px)] min-h-[500px]">
       <div className="bg-white p-4 rounded-2xl border border-slate-200 flex flex-col gap-4 shadow-sm overflow-hidden">
         <div>
-            <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+          <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Filtro de Ruta</label>
             <div className="flex gap-1 flex-wrap">
               <button 
@@ -1180,7 +1261,7 @@ function MapsView({ result, rules, selectedRoute, setSelectedRoute, selectedDay,
                 <div className="flex items-center gap-2 mt-1">
                   <span className="text-[9px] font-bold text-slate-400 flex items-center gap-1 uppercase tracking-tighter"><Clock size={10} className="text-indigo-400"/> {p.horaLlegada}-{p.horaSalida}</span>
                   <span className={`text-[9px] font-bold flex items-center gap-1 uppercase tracking-tighter ${p.tipoTransporte === 'pie' ? 'text-emerald-500' : 'text-blue-500'}`}>
-                    {p.tipoTransporte === 'pie' ? <Navigation size={8} /> : <Truck size={8} />} {p.tipoTransporte}
+                    {p.tipoTransporte === 'pie' ? <Navigation size={8} /> : <Truck size={8} />} {transportLabel(p.tipoTransporte)}
                   </span>
                 </div>
               </div>
@@ -1188,70 +1269,123 @@ function MapsView({ result, rules, selectedRoute, setSelectedRoute, selectedDay,
           ))}
         </div>
       </div>
-      <div className="lg:col-span-3 bg-white rounded-2xl border border-slate-200 overflow-hidden relative shadow-inner z-10">
-        <MapContainer center={center} zoom={13} style={{ height: '100%', width: '100%' }}>
-          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-          <MapBoundsHandler filteredRoutes={filteredRoutes} />
-          {filteredRoutes.map((r: any) => (
-            <React.Fragment key={`${r.rutaNombre}-${r.dia}`}>
-              {r.paradas.map((p: any, i: number) => (
-                <React.Fragment key={i}>
-                  {p.geometry ? (
-                    <GeoJSON 
-                      key={`geo-${r.rutaNombre}-${i}-${p.pdv.id}`}
-                      data={p.geometry} 
-                      style={{ 
-                        color: p.tipoTransporte === 'pie' ? '#10b981' : '#4f46e5', 
-                        weight: p.tipoTransporte === 'pie' ? 5 : 4, 
-                        opacity: 0.9,
-                        dashArray: p.tipoTransporte === 'pie' ? '8, 12' : undefined
-                      }} 
-                    />
-                  ) : (
-                    i > 0 && (
+      <div className="lg:col-span-3 bg-white rounded-2xl border border-slate-200 overflow-hidden relative shadow-inner z-10 flex flex-col h-full">
+        {/* Floating Toggle Panel */}
+        <div className="absolute top-4 left-4 z-20 flex bg-white/95 backdrop-blur-md p-1 rounded-xl border border-slate-200 shadow-lg">
+          <button
+            onClick={() => setMapMode('interactive')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer flex items-center gap-1.5 ${
+              mapMode === 'interactive' 
+                ? 'bg-indigo-600 text-white shadow-md' 
+                : 'text-slate-600 hover:text-indigo-600 hover:bg-slate-50'
+            }`}
+          >
+            <MapIcon size={12} />
+            Mapa Interactivo
+          </button>
+          <button
+            onClick={() => setMapMode('real')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer flex items-center gap-1.5 ${
+              mapMode === 'real' 
+                ? 'bg-indigo-600 text-white shadow-md' 
+                : 'text-slate-600 hover:text-indigo-600 hover:bg-slate-50'
+            }`}
+          >
+            <Navigation size={12} />
+            Mapa Real (OSRM/Folium)
+          </button>
+        </div>
+
+        {mapMode === 'interactive' ? (
+          <MapContainer center={center} zoom={13} style={{ height: '100%', width: '100%' }}>
+            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+            <MapBoundsHandler filteredRoutes={filteredRoutes} />
+            {filteredRoutes.map((r: any) => (
+              <React.Fragment key={`${r.rutaNombre}-${r.dia}`}>
+                {r.paradas.map((p: any, i: number) => (
+                  <React.Fragment key={i}>
+                    {i > 0 && (
                       <Polyline 
-                        positions={[
-                          [r.paradas[i-1].pdv.latitud, r.paradas[i-1].pdv.longitud],
-                          [p.pdv.latitud, p.pdv.longitud]
-                        ]} 
+                        key={`polyline-${r.rutaNombre}-${i}-${p.pdv.id}`}
+                        positions={p.geometry && p.geometry.coordinates 
+                          ? p.geometry.coordinates.map((c: number[]) => [c[1], c[0]])
+                          : [
+                              [r.paradas[i-1].pdv.latitud, r.paradas[i-1].pdv.longitud],
+                              [p.pdv.latitud, p.pdv.longitud]
+                            ]
+                        } 
                         color={p.tipoTransporte === 'pie' ? '#10b981' : '#4f46e5'} 
-                        weight={p.tipoTransporte === 'pie' ? 5 : 3} 
-                        opacity={0.7} 
+                        weight={p.tipoTransporte === 'pie' ? 5 : 4} 
+                        opacity={p.tipoTransporte === 'pie' ? 0.85 : 0.8} 
                         dashArray={p.tipoTransporte === 'pie' ? '8, 12' : undefined} 
                       />
-                    )
-                  )}
-                  <Marker 
-                    position={[p.pdv.latitud, p.pdv.longitud]}
-                    icon={L.divIcon({
-                      className: 'custom-div-icon',
-                      html: `<div style="background-color: #4f46e5; color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3); line-height: 20px;">${i + 1}</div>`,
-                      iconSize: [24, 24],
-                      iconAnchor: [12, 12]
-                    })}
-                  >
-                    <Popup>
-                      <div className="p-1 min-w-[120px]">
-                        <h5 className="font-bold text-indigo-600 m-0 text-xs tracking-tight uppercase">{p.pdv.pdv}</h5>
-                        <p className="text-[10px] text-slate-500 m-0 mt-1 italic">{p.pdv.direccion}</p>
-                        <div className="mt-2 border-t border-slate-100 pt-2 flex flex-col gap-1.5">
-                          <div className="flex justify-between text-[9px] font-bold"><span className="text-slate-400 uppercase tracking-tighter">LLEGADA:</span> <span className="text-slate-800">{p.horaLlegada}</span></div>
-                          <div className="flex justify-between text-[9px] font-bold"><span className="text-slate-400 uppercase tracking-tighter">SALIDA:</span> <span className="text-slate-800">{p.horaSalida}</span></div>
-                          <div className="flex justify-between text-[9px] font-bold border-t border-slate-50 pt-1"><span className="text-slate-400 uppercase tracking-tighter">TRAMO:</span> <span className="text-indigo-600">{p.distanciaPreviaKm.toFixed(2)} KM</span></div>
+                    )}
+                    <Marker 
+                      position={[p.pdv.latitud, p.pdv.longitud]}
+                      icon={L.divIcon({
+                        className: 'custom-div-icon',
+                        html: `<div style="background-color: #4f46e5; color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3); line-height: 20px;">${i + 1}</div>`,
+                        iconSize: [24, 24],
+                        iconAnchor: [12, 12]
+                      })}
+                    >
+                      <Popup>
+                        <div className="p-1 min-w-[120px]">
+                          <h5 className="font-bold text-indigo-600 m-0 text-xs tracking-tight uppercase">{p.pdv.pdv}</h5>
+                          <p className="text-[10px] text-slate-500 m-0 mt-1 italic">{p.pdv.direccion}</p>
+                          <div className="mt-2 border-t border-slate-100 pt-2 flex flex-col gap-1.5">
+                            <div className="flex justify-between text-[9px] font-bold"><span className="text-slate-400 uppercase tracking-tighter">LLEGADA:</span> <span className="text-slate-800">{p.horaLlegada}</span></div>
+                            <div className="flex justify-between text-[9px] font-bold"><span className="text-slate-400 uppercase tracking-tighter">SALIDA:</span> <span className="text-slate-800">{p.horaSalida}</span></div>
+                            <div className="flex justify-between text-[9px] font-bold"><span className="text-slate-400 uppercase tracking-tighter">TRANSPORTE:</span> <span className={isWalkingTransport(p.tipoTransporte) ? 'text-emerald-600' : 'text-blue-600'}>{transportLabel(p.tipoTransporte)}</span></div>
+                            <div className="flex justify-between text-[9px] font-bold border-t border-slate-50 pt-1"><span className="text-slate-400 uppercase tracking-tighter">TRAMO:</span> <span className="text-indigo-600">{p.distanciaPreviaKm.toFixed(2)} KM</span></div>
+                          </div>
                         </div>
-                      </div>
-                    </Popup>
-                  </Marker>
-                </React.Fragment>
-              ))}
-            </React.Fragment>
-          ))}
-        </MapContainer>
-        <div className="absolute top-4 right-4 z-20 flex flex-col gap-2">
-           <div className="bg-white/80 backdrop-blur-sm px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm text-[10px] font-bold uppercase tracking-widest text-slate-600">
-             Zona: <span className="text-indigo-600 underline">Distrito Metropolitano</span>
-           </div>
-        </div>
+                      </Popup>
+                    </Marker>
+                  </React.Fragment>
+                ))}
+              </React.Fragment>
+            ))}
+          </MapContainer>
+        ) : selectedRoute ? (
+          <iframe
+            src={`/api/session/${result.id}/map/${encodeURIComponent(selectedRoute)}/${selectedDay !== null ? selectedDay : 'all'}`}
+            className="w-full h-full border-none z-0"
+            title="Real Map"
+          />
+        ) : (
+          <div className="w-full h-full flex flex-col items-center justify-center bg-slate-50 p-8 text-center select-none animate-fade-in">
+            <div className="w-16 h-16 rounded-full bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 mb-4 shadow-sm">
+              <MapIcon size={28} className="stroke-[1.5]" />
+            </div>
+            <h3 className="text-sm font-bold text-slate-800 tracking-tight mb-2">
+              Visualización de Mapa Real (OSRM/Folium)
+            </h3>
+            <p className="text-[11px] text-slate-500 max-w-xs leading-relaxed mb-6">
+              Para trazar el recorrido real calle por calle con precisión geográfica y soporte multimodal, selecciona una ruta específica en el panel izquierdo.
+            </p>
+            <div className="flex gap-2">
+              <span className="text-[9px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded uppercase tracking-wider">
+                Precisión de OSRM
+              </span>
+              <span className="text-[9px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded uppercase tracking-wider">
+                Multimodal (Carro / Pie)
+              </span>
+            </div>
+          </div>
+        )}
+
+        {mapMode === 'interactive' && (
+          <div className="absolute top-4 right-4 z-20 flex flex-col gap-2">
+            <div className="bg-white/80 backdrop-blur-sm px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm text-[10px] font-bold uppercase tracking-widest text-slate-600">
+              Zona: <span className="text-indigo-600 underline">Distrito Metropolitano</span>
+            </div>
+            <div className="bg-white/90 backdrop-blur-sm px-3 py-2 rounded-lg border border-slate-200 shadow-sm text-[10px] font-bold uppercase tracking-widest text-slate-600 space-y-1">
+              <div className="flex items-center gap-2"><span className="w-8 border-t-4 border-dashed border-emerald-500"></span>A pie</div>
+              <div className="flex items-center gap-2"><span className="w-8 border-t-4 border-indigo-600"></span>Carro</div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1306,6 +1440,8 @@ function CapacityView({
   setData,
   groupBy,
   setGroupBy,
+  frequencyPeriod,
+  setFrequencyPeriod,
   isCalculating,
   setIsCalculating,
   capacityProgress,
@@ -1345,11 +1481,11 @@ function CapacityView({
     setLocalResult(null);
     
     try {
-      console.log('Starting capacity analysis with:', { groupBy, pdvCount: data.length });
+      console.log('Starting capacity analysis with:', { groupBy, frequencyPeriod, pdvCount: data.length });
       const startResp = await fetch('/api/estimate-capacity', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data, rules, groupBy })
+        body: JSON.stringify({ data, rules, groupBy, frequencyPeriod })
       });
       
       if (!startResp.ok) {
@@ -1441,6 +1577,33 @@ function CapacityView({
                 </div>
               </div>
 
+              <div>
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Frecuencia</label>
+                <div className="flex gap-2">
+                  {[
+                    { value: 'week', label: 'Por semana' },
+                    { value: 'month', label: 'Por mes' }
+                  ].map((option: { value: 'week' | 'month'; label: string }) => (
+                    <button
+                      key={option.value}
+                      onClick={() => setFrequencyPeriod(option.value)}
+                      className={`flex-1 py-2 rounded-lg text-xs font-bold border transition-all ${
+                        frequencyPeriod === option.value
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                {frequencyPeriod === 'month' && (
+                  <p className="mt-2 text-[10px] text-slate-500 leading-relaxed">
+                    La columna Frecuencia significa visitas al mes. 1, 2 o 3 se reparten en semanas distintas de las 4 semanas, sin repetir el PDV dentro de una misma semana.
+                  </p>
+                )}
+              </div>
+
               {!data ? (
                 <label 
                   onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('border-indigo-500', 'bg-indigo-50/50'); }}
@@ -1526,6 +1689,25 @@ function CapacityView({
                       <p className="text-xl font-bold">{result.summary.totalHoras?.toFixed(0)}h</p>
                     </div>
                   </div>
+                  <div className="mt-4 grid grid-cols-3 gap-4 text-xs text-indigo-100">
+                    <div className="bg-white/10 rounded-lg p-3">
+                      <p className="font-bold uppercase text-[9px] mb-1">Por horas</p>
+                      <p className="font-black text-white">{result.summary.personasPorHoras ?? '-'}</p>
+                    </div>
+                    <div className="bg-white/10 rounded-lg p-3">
+                      <p className="font-bold uppercase text-[9px] mb-1">Por rutas</p>
+                      <p className="font-black text-white">{result.summary.personasPorRutas ?? '-'}</p>
+                    </div>
+                    <div className="bg-white/10 rounded-lg p-3">
+                      <p className="font-bold uppercase text-[9px] mb-1">Horas/persona</p>
+                      <p className="font-black text-white">{result.summary.horasPorPersonaPromedio?.toFixed(1) ?? '-'}h</p>
+                    </div>
+                  </div>
+                  {result.summary.frecuenciaPeriodo === 'month' && (
+                    <p className="mt-4 text-[10px] font-bold uppercase tracking-widest text-indigo-100">
+                      Frecuencia mensual: visitas distribuidas entre 4 semanas, sin repetir el PDV en la misma semana
+                    </p>
+                  )}
                </div>
                <div className="p-8 space-y-6">
                   {result.omitidos && result.omitidos.length > 0 && (

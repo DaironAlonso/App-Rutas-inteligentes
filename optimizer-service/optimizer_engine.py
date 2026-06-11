@@ -52,6 +52,13 @@ def get_days_from_freq(freq: int, index: int) -> str:
     start_day = (index % 6) + 1
     return str(start_day)
 
+def get_weeks_from_monthly_freq(freq: int, index: int) -> str:
+    """Retorna semanas únicas del mes para una frecuencia mensual de 1 a 4."""
+    visits = min(max(int(freq), 1), 4)
+    start_week = index % 4
+    weeks = sorted({((start_week + offset) % 4) + 1 for offset in range(visits)})
+    return ",".join(str(week) for week in weeks)
+
 class BusinessRules:
     def __init__(self, rules_dict: Dict[str, Any]):
         self.horaInicio = rules_dict.get('horaInicio', '08:00')
@@ -83,7 +90,7 @@ class RouteOptimizer:
         Intenta primero el contenedor local y luego el servidor público.
         Implements circuit breaker with exponential backoff and failure caching.
         """
-        profile = 'car'
+        profile = mode
         key = f"{start[0]:.5f},{start[1]:.5f}-{end[0]:.5f},{end[1]:.5f}-{profile}"
         
         # Check if we have cached result
@@ -151,6 +158,19 @@ class RouteOptimizer:
             dias_str = str(dias_raw).replace(',', ' ').split()
             dias_permitidos = [int(d) for d in dias_str if d.isdigit()]
             return day in dias_permitidos
+        except Exception:
+            return False
+
+    def should_visit_in_week(self, pdv: Dict[str, Any], week: int) -> bool:
+        """Determina si un PDV mensual debe visitarse en la semana indicada."""
+        semanas_raw = pdv.get('semanasMes')
+        if not semanas_raw:
+            return True
+
+        try:
+            weeks_str = str(semanas_raw).replace(',', ' ').split()
+            semanas_permitidas = [int(w) for w in weeks_str if w.isdigit()]
+            return week in semanas_permitidas
         except Exception:
             return False
 
@@ -272,7 +292,7 @@ class RouteOptimizer:
         return result
 
     async def build_itinerary(self, day: int, ruta_nombre: str, sequence: List[Dict[str, Any]], current_weekly_hours: float) -> Dict[str, Any]:
-        """Calcula el itinerario detallado minuto a minuto respetando almuerzos y jornadas mixtas (a pie y en bus)."""
+        """Calcula el itinerario detallado minuto a minuto respetando almuerzos y jornadas mixtas (a pie y en carro)."""
         paradas = []
         omitted = []
         
@@ -304,7 +324,15 @@ class RouteOptimizer:
                 prev = sequence[i - 1]
                 haversine_dist = calculate_haversine(prev['latitud'], prev['longitud'], p['latitud'], p['longitud'])
                 
-                osrm_data = await self.fetch_osrm([prev['latitud'], prev['longitud']], [p['latitud'], p['longitud']], 'car')
+                es_pie = haversine_dist <= self.rules.distanciaCaminableKm
+                profile = "foot" if es_pie else "car"
+                
+                osrm_data = await self.fetch_osrm([prev['latitud'], prev['longitud']], [p['latitud'], p['longitud']], profile)
+                
+                # Fallback to 'car' profile if 'foot' profile is unsupported on public/local OSRM servers
+                if not osrm_data and profile == 'foot':
+                    print("[OSRM] 'foot' profile failed or not loaded. Falling back to 'car' profile...")
+                    osrm_data = await self.fetch_osrm([prev['latitud'], prev['longitud']], [p['latitud'], p['longitud']], 'car')
                 
                 if osrm_data:
                     dist_prev = osrm_data['distance']
@@ -315,7 +343,7 @@ class RouteOptimizer:
                         transport = 'pie'
                         travel_time = (dist_prev / self.rules.velocidadCaminandoKmh) * 60.0
                     else:
-                        transport = 'bus'
+                        transport = 'carro'
                         travel_time = osrm_data['duration']  # Duración de OSRM en minutos
                 else:
                     dist_prev = haversine_dist
@@ -323,7 +351,7 @@ class RouteOptimizer:
                         transport = 'pie'
                         travel_time = (dist_prev / self.rules.velocidadCaminandoKmh) * 60.0
                     else:
-                        transport = 'bus'
+                        transport = 'carro'
                         travel_time = (dist_prev / self.rules.velocidadBusKmh) * 60.0
 
             if travel_time > self.rules.maxRelocalizacionMin:
@@ -388,6 +416,46 @@ class RouteOptimizer:
                 'kmTotales': km_totales,
                 'geometriaRaw': combined_geo
             },
+            'omitted': omitted
+        }
+
+    async def process_route_monthly_aware(self, ruta_nombre: str, pdvs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Procesa una ruta semanal o un calendario mensual de 4 semanas."""
+        daily_routes = []
+        omitted = []
+        has_monthly_plan = any(p.get('semanasMes') for p in pdvs)
+        weeks_to_process = range(1, 5) if has_monthly_plan else range(1, 2)
+
+        for week in weeks_to_process:
+            weekly_hours = 0.0
+
+            for day in range(1, 7):
+                active_pdvs = [
+                    p for p in pdvs
+                    if self.should_visit_in_week(p, week) and self.should_visit_today(p, day)
+                ]
+                if len(active_pdvs) == 0:
+                    continue
+
+                try:
+                    order_indices = await asyncio.to_thread(self.optimize_with_or_tools, active_pdvs)
+                    optimized_order = [active_pdvs[i] for i in order_indices]
+                except Exception as e:
+                    print(f"Error en optimizacion OR-Tools, activando fallback local: {e}")
+                    optimized_order = self.optimize_sequence_fallback(active_pdvs)
+
+                result = await self.build_itinerary(day, ruta_nombre, optimized_order, weekly_hours)
+                
+                if len(result['route']['paradas']) > 0:
+                    result['route']['semanaMes'] = week if has_monthly_plan else None
+                    daily_routes.append(result['route'])
+                    weekly_hours += result['route']['horasTrabajadas']
+                for item in result['omitted']:
+                    item['semanaMes'] = week if has_monthly_plan else None
+                omitted.extend(result['omitted'])
+
+        return {
+            'dailyRoutes': daily_routes,
             'omitted': omitted
         }
 
